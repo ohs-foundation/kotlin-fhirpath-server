@@ -9,5 +9,6 @@ RUN ./gradlew buildFatJar --no-daemon
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=build /app/build/libs/fhirpath-server.jar app.jar
+COPY kotlin-fhirpath-config.json kotlin-fhirpath-config.json
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]

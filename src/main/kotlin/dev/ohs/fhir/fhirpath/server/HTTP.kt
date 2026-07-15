@@ -30,7 +30,7 @@ fun Application.configureHTTP() {
     allowHeader(HttpHeaders.Origin)
     exposeHeader(HttpHeaders.Location)
     exposeHeader(HttpHeaders.ContentLocation)
-    allowHost("fhirpath-lab.com")
+    allowHost("fhirpath-lab.com", subDomains = listOf("hackweek"))
     allowHost("dev.fhirpath-lab.com")
     allowHost("azurewebsites.net", subDomains = listOf("fhirpath-lab", "fhirpath-lab-dev"))
     allowHost("localhost:3000") // allow local dev server for testing
