@@ -72,18 +72,32 @@ Validation errors return HTTP `400` with an `OperationOutcome`. Unexpected serve
 
 ## Versioning
 
-The server's version is derived from `git describe --tags --always --dirty` at build time (see
-`build.gradle.kts`) and reported in the `/` response, so a running deployment can always be traced
-back to the release or commit it was built from:
+The build derives the server version from `git describe --tags --always --dirty` (see
+`build.gradle.kts`). The `/` endpoint reports this version. Every deployment therefore identifies
+the release or commit that produced it.
 
-- On an exact tag (e.g. a GitHub Release tagged `v1.2.3`), the version is `1.2.3`.
-- A few commits past the last tag, it's `1.2.3-4-gabc1234` (commit count + abbreviated SHA).
-- Before the first tag exists, it falls back to the bare abbreviated commit SHA.
-- With uncommitted local changes, a `-dirty` suffix is appended.
+The build removes the leading `v` from the tag name:
 
-Cutting a release is a plain git tag — `git tag v1.2.3 && git push --tags` (then optionally turn it
-into a GitHub Release) — and any subsequent build, including the Docker build below, picks up the new
-version automatically.
+|         Build point          |                   Reported version                    |
+|------------------------------|-------------------------------------------------------|
+| On the exact tag `v1.2.3`    | `1.2.3`                                               |
+| 4 commits after tag `v1.2.3` | `1.2.3-4-gabc1234` (commit count and abbreviated SHA) |
+| Before the first tag exists  | The abbreviated commit SHA                            |
+| With uncommitted changes     | The same value, plus the suffix `-dirty`              |
+| When git is unavailable      | `0.0.0-unknown`                                       |
+
+### Create a release
+
+To release a new version, tag the commit and push the tag:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+Every later build reads the new tag, including the Docker build. You do not need to edit a version
+number anywhere in the project. You can also turn the tag into a GitHub Release, but the version
+does not depend on it.
 
 ## Deployment
 
