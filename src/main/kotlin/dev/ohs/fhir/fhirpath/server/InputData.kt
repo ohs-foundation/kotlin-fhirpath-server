@@ -19,6 +19,12 @@ data class InputData(
   val contextExpression: String?,
   val expression: String,
   val resourceStr: String,
-  val variables: Map<String, String?>,
+  /**
+   * Variable bindings, keyed by name. Values are the FHIRPath primitives the engine understands —
+   * [String], [Boolean], [Int], `BigDecimal`, `FhirPathDate`, `FhirPathDateTime`, `FhirPathTime` —
+   * or `null` for a variable declared with no `value[x]`, which `variables.part.value` (0..1)
+   * permits.
+   */
+  val variables: Map<String, Any?>,
   val terminologyServer: String?,
 )

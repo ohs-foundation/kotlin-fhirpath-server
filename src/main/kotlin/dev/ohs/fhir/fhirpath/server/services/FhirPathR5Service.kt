@@ -82,7 +82,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
 internal class FhirPathR5Service : FhirPathService<Parameters.Parameter, Resource>() {
-  override val evaluatorLabel = "Kotlin FHIRPath (R5)"
+  override val fhirVersion = "R5"
   private val resourceParser = Json
 
   override fun getFhirPathEngine() = FhirPathEngine.forR5()
@@ -113,6 +113,19 @@ internal class FhirPathR5Service : FhirPathService<Parameters.Parameter, Resourc
   override fun makeGroupParameter(name: String, parts: List<Parameters.Parameter>) =
     Parameters.Parameter(name = FhirString(value = name), part = parts)
 
+  override fun renameParameter(param: Parameters.Parameter, name: String) =
+    param.copy(name = FhirString(value = name))
+
+  override fun addResourcePath(param: Parameters.Parameter, path: String) =
+    param.copy(
+      extension =
+        param.extension +
+          Extension(
+            url = RESOURCE_PATH_EXTENSION_URL,
+            value = Extension.Value.String(value = FhirString(value = path)),
+          )
+    )
+
   override fun makeResourceParameter(name: String, resource: Resource) =
     Parameters.Parameter(name = FhirString(value = name), resource = resource)
 
@@ -124,11 +137,16 @@ internal class FhirPathR5Service : FhirPathService<Parameters.Parameter, Resourc
 
   override fun makeQuantityParameter(value: FhirPathQuantity) =
     Parameters.Parameter(
-      name = FhirString(value = "quantity"),
+      name = FhirString(value = "Quantity"),
       value =
         Parameters.Parameter.Value.Quantity(
           value =
-            Quantity(value = Decimal(value = value.value), unit = FhirString(value = value.unit))
+            Quantity(
+              value = Decimal(value = value.value),
+              unit = FhirString(value = quantityUnit(value.unit)),
+              system = ucumCode(value.unit)?.let { Uri(value = UCUM_SYSTEM) },
+              code = ucumCode(value.unit)?.let { Code(value = it) },
+            )
         ),
     )
 
@@ -168,7 +186,9 @@ internal class FhirPathR5Service : FhirPathService<Parameters.Parameter, Resourc
 
   override fun makeStringValueParameter(value: String) =
     Parameters.Parameter(
-      name = FhirString(value = "string"),
+      // An empty string is flagged by name: serializers routinely drop empty values, so the name is
+      // the only reliable signal that the result was an empty string rather than nothing at all.
+      name = FhirString(value = if (value.isEmpty()) "empty-string" else "string"),
       value = Parameters.Parameter.Value.String(value = FhirString(value = value)),
     )
 
@@ -242,154 +262,156 @@ internal class FhirPathR5Service : FhirPathService<Parameters.Parameter, Resourc
         )
       is Address ->
         Parameters.Parameter(
-          name = FhirString(value = "address"),
+          name = FhirString(value = "Address"),
           value = Parameters.Parameter.Value.Address(value),
         )
       is Age ->
         Parameters.Parameter(
-          name = FhirString(value = "age"),
+          name = FhirString(value = "Age"),
           value = Parameters.Parameter.Value.Age(value),
         )
       is FhirAnnotation ->
         Parameters.Parameter(
-          name = FhirString(value = "annotation"),
+          name = FhirString(value = "Annotation"),
           value = Parameters.Parameter.Value.Annotation(value),
         )
       is Attachment ->
         Parameters.Parameter(
-          name = FhirString(value = "attachment"),
+          name = FhirString(value = "Attachment"),
           value = Parameters.Parameter.Value.Attachment(value),
         )
       is CodeableConcept ->
         Parameters.Parameter(
-          name = FhirString(value = "codeableConcept"),
+          name = FhirString(value = "CodeableConcept"),
           value = Parameters.Parameter.Value.CodeableConcept(value),
         )
       is Coding ->
         Parameters.Parameter(
-          name = FhirString(value = "coding"),
+          name = FhirString(value = "Coding"),
           value = Parameters.Parameter.Value.Coding(value),
         )
       is ContactPoint ->
         Parameters.Parameter(
-          name = FhirString(value = "contactPoint"),
+          name = FhirString(value = "ContactPoint"),
           value = Parameters.Parameter.Value.ContactPoint(value),
         )
       is Count ->
         Parameters.Parameter(
-          name = FhirString(value = "count"),
+          name = FhirString(value = "Count"),
           value = Parameters.Parameter.Value.Count(value),
         )
       is Distance ->
         Parameters.Parameter(
-          name = FhirString(value = "distance"),
+          name = FhirString(value = "Distance"),
           value = Parameters.Parameter.Value.Distance(value),
         )
       is Duration ->
         Parameters.Parameter(
-          name = FhirString(value = "duration"),
+          name = FhirString(value = "Duration"),
           value = Parameters.Parameter.Value.Duration(value),
         )
       is HumanName ->
         Parameters.Parameter(
-          name = FhirString(value = "humanName"),
+          name = FhirString(value = "HumanName"),
           value = Parameters.Parameter.Value.HumanName(value),
         )
       is Identifier ->
         Parameters.Parameter(
-          name = FhirString(value = "identifier"),
+          name = FhirString(value = "Identifier"),
           value = Parameters.Parameter.Value.Identifier(value),
         )
       is Money ->
         Parameters.Parameter(
-          name = FhirString(value = "money"),
+          name = FhirString(value = "Money"),
           value = Parameters.Parameter.Value.Money(value),
         )
       is Period ->
         Parameters.Parameter(
-          name = FhirString(value = "period"),
+          name = FhirString(value = "Period"),
           value = Parameters.Parameter.Value.Period(value),
         )
       is Quantity ->
         Parameters.Parameter(
-          name = FhirString(value = "quantity"),
+          name = FhirString(value = "Quantity"),
           value = Parameters.Parameter.Value.Quantity(value),
         )
       is Range ->
         Parameters.Parameter(
-          name = FhirString(value = "range"),
+          name = FhirString(value = "Range"),
           value = Parameters.Parameter.Value.Range(value),
         )
       is Ratio ->
         Parameters.Parameter(
-          name = FhirString(value = "ratio"),
+          name = FhirString(value = "Ratio"),
           value = Parameters.Parameter.Value.Ratio(value),
         )
       is Reference ->
         Parameters.Parameter(
-          name = FhirString(value = "reference"),
+          name = FhirString(value = "Reference"),
           value = Parameters.Parameter.Value.Reference(value),
         )
       is SampledData ->
         Parameters.Parameter(
-          name = FhirString(value = "sampledData"),
+          name = FhirString(value = "SampledData"),
           value = Parameters.Parameter.Value.SampledData(value),
         )
       is Signature ->
         Parameters.Parameter(
-          name = FhirString(value = "signature"),
+          name = FhirString(value = "Signature"),
           value = Parameters.Parameter.Value.Signature(value),
         )
       is Timing ->
         Parameters.Parameter(
-          name = FhirString(value = "timing"),
+          name = FhirString(value = "Timing"),
           value = Parameters.Parameter.Value.Timing(value),
         )
       is ContactDetail ->
         Parameters.Parameter(
-          name = FhirString(value = "contactDetail"),
+          name = FhirString(value = "ContactDetail"),
           value = Parameters.Parameter.Value.ContactDetail(value),
         )
       is DataRequirement ->
         Parameters.Parameter(
-          name = FhirString(value = "dataRequirement"),
+          name = FhirString(value = "DataRequirement"),
           value = Parameters.Parameter.Value.DataRequirement(value),
         )
       is Expression ->
         Parameters.Parameter(
-          name = FhirString(value = "expression"),
+          name = FhirString(value = "Expression"),
           value = Parameters.Parameter.Value.Expression(value),
         )
       is ParameterDefinition ->
         Parameters.Parameter(
-          name = FhirString(value = "parameterDefinition"),
+          name = FhirString(value = "ParameterDefinition"),
           value = Parameters.Parameter.Value.ParameterDefinition(value),
         )
       is RelatedArtifact ->
         Parameters.Parameter(
-          name = FhirString(value = "relatedArtifact"),
+          name = FhirString(value = "RelatedArtifact"),
           value = Parameters.Parameter.Value.RelatedArtifact(value),
         )
       is TriggerDefinition ->
         Parameters.Parameter(
-          name = FhirString(value = "triggerDefinition"),
+          name = FhirString(value = "TriggerDefinition"),
           value = Parameters.Parameter.Value.TriggerDefinition(value),
         )
       is UsageContext ->
         Parameters.Parameter(
-          name = FhirString(value = "usageContext"),
+          name = FhirString(value = "UsageContext"),
           value = Parameters.Parameter.Value.UsageContext(value),
         )
       is Dosage ->
         Parameters.Parameter(
-          name = FhirString(value = "dosage"),
+          name = FhirString(value = "Dosage"),
           value = Parameters.Parameter.Value.Dosage(value),
         )
       is Meta ->
         Parameters.Parameter(
-          name = FhirString(value = "meta"),
+          name = FhirString(value = "Meta"),
           value = Parameters.Parameter.Value.Meta(value),
         )
+      // A resource is representable directly; the json-value extension below is for what is not.
+      is Resource -> makeResourceParameter(name = fhirTypeName(value), resource = value)
       else ->
         Parameters.Parameter(
           extension =
@@ -403,7 +425,7 @@ internal class FhirPathR5Service : FhirPathService<Parameters.Parameter, Resourc
                   ),
               )
             ),
-          name = FhirString(value = value::class.simpleName?.lowercase()),
+          name = FhirString(value = fhirTypeName(value)),
         )
     }
 }

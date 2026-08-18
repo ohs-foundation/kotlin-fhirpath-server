@@ -18,15 +18,47 @@ package dev.ohs.fhir.fhirpath.server.services
 import com.ionspin.kotlin.bignum.decimal.BigDecimal
 import dev.ohs.fhir.fhirpath.FhirPathEngine
 import dev.ohs.fhir.fhirpath.TraceEntry
+import dev.ohs.fhir.fhirpath.server.AppVersion
+import dev.ohs.fhir.fhirpath.server.ExpressionEvaluationException
 import dev.ohs.fhir.fhirpath.server.InputData
+import dev.ohs.fhir.fhirpath.server.InvalidFieldValueException
 import dev.ohs.fhir.fhirpath.types.FhirPathDate
 import dev.ohs.fhir.fhirpath.types.FhirPathDateTime
 import dev.ohs.fhir.fhirpath.types.FhirPathQuantity
 import dev.ohs.fhir.fhirpath.types.FhirPathTime
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+
+/** Extension reporting where in the test resource a value came from. */
+internal const val RESOURCE_PATH_EXTENSION_URL =
+  "http://fhir.forms-lab.com/StructureDefinition/resource-path"
+
+/** Code system for the `code` of a quantity whose unit is a UCUM unit. */
+internal const val UCUM_SYSTEM = "http://unitsofmeasure.org"
+
+/** FHIRPath calendar duration keywords. Any other quantity unit is a UCUM code. */
+private val CALENDAR_DURATION_UNITS =
+  setOf(
+    "year",
+    "years",
+    "month",
+    "months",
+    "week",
+    "weeks",
+    "day",
+    "days",
+    "hour",
+    "hours",
+    "minute",
+    "minutes",
+    "second",
+    "seconds",
+    "millisecond",
+    "milliseconds",
+  )
 
 /**
  * Base implementation of [FhirPathService] for a specific FHIR version.
@@ -36,15 +68,15 @@ import kotlinx.serialization.json.JsonElement
  * - [Resource] — the version's base `Resource` type
  *
  * ## Minimum required overrides
- * |Member                 |Purpose                                                                                          |
- * |-----------------------|-------------------------------------------------------------------------------------------------|
- * |[evaluatorLabel]       |Human-readable label included in the `evaluator` output parameter (e.g. `"Kotlin FHIRPath (R4)"`)|
- * |[getFhirPathEngine]    |Get Version-specific [FhirPathEngine] instance (e.g. `FhirPathEngine.forR4()`)                   |
- * |[decodeResource]       |Deserialise a JSON string into the version's [Resource] type                                     |
- * |[buildFhirParameters]  |Serialise a `Parameters` resource (with the given [Param] list) back to a JSON string            |
- * |[makeStringParameter]  |Construct a string-valued `Parameters.Parameter` with an optional list of child parts            |
- * |[makeGroupParameter]   |Construct a group `Parameters.Parameter` (no value, only child parts)                            |
- * |[makeResourceParameter]|Construct a resource-valued `Parameters.Parameter`                                               |
+ * |Member                 |Purpose                                                                              |
+ * |-----------------------|-------------------------------------------------------------------------------------|
+ * |[fhirVersion]          |FHIR version tag for the `evaluator` output parameter (e.g. `"R4"`)                  |
+ * |[getFhirPathEngine]    |Get Version-specific [FhirPathEngine] instance (e.g. `FhirPathEngine.forR4()`)       |
+ * |[decodeResource]       |Deserialise a JSON string into the version's [Resource] type                         |
+ * |[buildFhirParameters]  |Serialise a `Parameters` resource (with the given [Param] list) back to a JSON string|
+ * |[makeStringParameter]  |Construct a string-valued `Parameters.Parameter` with an optional list of child parts|
+ * |[makeGroupParameter]   |Construct a group `Parameters.Parameter` (no value, only child parts)                |
+ * |[makeResourceParameter]|Construct a resource-valued `Parameters.Parameter`                                   |
  *
  * ## FHIRPath primitive type converters
  *
@@ -72,8 +104,18 @@ import kotlinx.serialization.json.JsonElement
  */
 internal abstract class FhirPathService<Param : Any, Resource : Any> {
 
-  /** Human-readable label emitted as the `evaluator` output parameter. */
-  protected abstract val evaluatorLabel: String
+  /**
+   * FHIR version this service evaluates against, e.g. `R4` — the bracketed part of
+   * [evaluatorLabel].
+   */
+  protected abstract val fhirVersion: String
+
+  /**
+   * The `evaluator` output parameter: engine name, engine version, and FHIR version in brackets, as
+   * the FHIRPath Lab API requires (its own example is `Java 6.6.5 (R4B)`).
+   */
+  private val evaluatorLabel: String
+    get() = "Kotlin FHIRPath ${AppVersion.engine} ($fhirVersion)"
 
   /** JSON codec used to round-trip the final `Parameters` resource. */
   protected val json = Json {}
@@ -148,6 +190,12 @@ internal abstract class FhirPathService<Param : Any, Resource : Any> {
   /** Build a group parameter named [name] with no value and the given child [parts]. */
   protected abstract fun makeGroupParameter(name: String, parts: List<Param>): Param
 
+  /** Return [param] renamed to [name]. */
+  protected abstract fun renameParameter(param: Param, name: String): Param
+
+  /** Return [param] with a [RESOURCE_PATH_EXTENSION_URL] extension for [path] added. */
+  protected abstract fun addResourcePath(param: Param, path: String): Param
+
   /** Build a resource-valued parameter named [name] containing [resource]. */
   protected abstract fun makeResourceParameter(name: String, resource: Resource): Param
 
@@ -156,51 +204,148 @@ internal abstract class FhirPathService<Param : Any, Resource : Any> {
    */
   protected abstract fun buildFhirParameters(id: String, params: List<Param>): String
 
-  private fun buildTracingParameters(traces: Map<String, List<TraceEntry>>) =
+  /**
+   * Evaluates [expression], reporting a parse or evaluation failure as an
+   * [ExpressionEvaluationException].
+   *
+   * The engine raises plain exceptions for faults in the submitted expression — an unparseable
+   * expression, an unknown variable, an unsupported operand pairing. Those are the caller's, not
+   * the server's, and reporting them as internal errors puts text like `Internal server error:
+   * token index 7 out of range 0..6` in front of whoever typed the expression.
+   */
+  private fun FhirPathEngine.evaluateOrFail(
+    expression: String,
+    base: Any,
+    variables: Map<String, Any?>,
+  ): Collection<Any> =
+    try {
+      evaluateExpression(expression, base, variables)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      throw ExpressionEvaluationException(
+        e.message ?: e::class.simpleName ?: "evaluation failed",
+        e,
+      )
+    }
+
+  /**
+   * Display form of a FHIRPath quantity unit.
+   *
+   * UCUM units keep the quotes of the expression literal they came from (`1 'mg'` yields `'mg'`),
+   * which is not a unit. Calendar durations (`1 year`) arrive unquoted and are left alone.
+   */
+  protected fun quantityUnit(unit: String?): String? = unit?.removeSurrounding("'")
+
+  /**
+   * UCUM code of [unit], or `null` when it names a calendar duration, which has no UCUM code and so
+   * belongs in `Quantity.unit` alone.
+   */
+  protected fun ucumCode(unit: String?): String? =
+    quantityUnit(unit)?.takeIf { it !in CALENDAR_DURATION_UNITS }
+
+  /**
+   * The `result.valueString` describing which context item a result belongs to, before the index is
+   * appended — `Patient.name` for a [contextExpression] of `name` or of `Patient.name`.
+   *
+   * A context expression that already names the resource type is left alone; prefixing it again
+   * would put `Patient.Patient.name[0]` in front of whoever wrote it.
+   */
+  private fun contextLabel(resourceType: String, contextExpression: String): String =
+    if (contextExpression == resourceType || contextExpression.startsWith("$resourceType."))
+      contextExpression
+    else "$resourceType.$contextExpression"
+
+  /** FHIR type name of [value] — `Patient`, `HumanName`, or `Patient#Contact` for a backbone. */
+  protected fun fhirTypeName(value: Any): String {
+    val type = value::class.java
+    val enclosing = type.enclosingClass
+    return if (enclosing != null) "${enclosing.simpleName}#${type.simpleName}" else type.simpleName
+  }
+
+  /**
+   * Re-roots an engine trace path onto [contextLabel].
+   *
+   * The engine reports paths relative to the base it evaluated against, so under a context
+   * expression they open at the context item's own type — `HumanName.given[0]`. The lab resolves
+   * paths against the test resource, so that leading segment is swapped for the context label to
+   * give `Patient.name[0].given[0]`. Without a context expression the base is already the resource
+   * and the path needs no change.
+   */
+  private fun rootedPath(path: String, contextLabel: String?): String {
+    if (contextLabel == null) return path
+    val withinContext = path.substringAfter('.', missingDelimiterValue = "")
+    return if (withinContext.isEmpty()) contextLabel else "$contextLabel.$withinContext"
+  }
+
+  private fun buildTracingParameters(
+    traces: Map<String, List<TraceEntry>>,
+    contextLabel: String? = null,
+  ) =
     traces.map { entry ->
       makeStringParameter(
         name = "trace",
         value = entry.key,
-        parts = entry.value.map { convertEvalResultToParameter(it.value) },
+        // Each traced value carries the path it came from, which the lab links back into the
+        // displayed resource.
+        parts =
+          entry.value.map {
+            addResourcePath(
+              convertEvalResultToParameter(it.value),
+              rootedPath(it.path, contextLabel),
+            )
+          },
       )
     }
 
   suspend fun evaluate(inputData: InputData): JsonElement =
     withContext(Dispatchers.Default) {
       val fhirpathEngine = getFhirPathEngine()
-      val resource = decodeResource(inputData.resourceStr)
+      val resource =
+        try {
+          decodeResource(inputData.resourceStr)
+        } catch (e: Exception) {
+          throw InvalidFieldValueException("Invalid 'resource': ${e.message}")
+        }
       val resourceType = resource::class.simpleName!!
+
+      // Per the FHIRPath Lab API's evaluation notes, `%resource` and `%rootResource` are the test
+      // resource, and `%context` is the item under evaluation — the test resource when no context
+      // expression narrows it. These take precedence over caller-supplied bindings of the same
+      // name, since the API defines them.
+      val standardVariables = mapOf("resource" to resource, "rootResource" to resource)
+      val contextVariables = inputData.variables + standardVariables
 
       val results =
         if (!inputData.contextExpression.isNullOrBlank()) {
           fhirpathEngine
-            .evaluateExpression(
+            .evaluateOrFail(
               inputData.contextExpression,
               base = resource,
-              variables = inputData.variables,
+              variables = contextVariables + mapOf("context" to resource),
             )
             .mapIndexed { index, contextValue ->
-              val label = "$resourceType.${inputData.contextExpression}[$index]"
+              val label = "${contextLabel(resourceType, inputData.contextExpression)}[$index]"
               val expressionResult =
-                fhirpathEngine.evaluateExpression(
+                fhirpathEngine.evaluateOrFail(
                   inputData.expression,
                   base = contextValue,
-                  variables = inputData.variables,
+                  variables = contextVariables + mapOf("context" to contextValue),
                 )
               makeStringParameter(
                 name = "result",
                 value = label,
                 parts =
                   expressionResult.map { convertEvalResultToParameter(it) } +
-                    buildTracingParameters(fhirpathEngine.traces),
+                    buildTracingParameters(fhirpathEngine.traces, contextLabel = label),
               )
             }
         } else {
           val expressionResult =
-            fhirpathEngine.evaluateExpression(
+            fhirpathEngine.evaluateOrFail(
               inputData.expression,
               base = resource,
-              variables = inputData.variables,
+              variables = contextVariables + mapOf("context" to resource),
             )
           listOf(
             makeGroupParameter(
@@ -217,12 +362,20 @@ internal abstract class FhirPathService<Param : Any, Resource : Any> {
         inputData.contextExpression?.let { add(makeStringParameter(name = "context", value = it)) }
         add(makeStringParameter(name = "expression", value = inputData.expression))
         add(makeResourceParameter(name = "resource", resource = resource))
+        inputData.terminologyServer?.let {
+          add(makeStringParameter(name = "terminologyServerUrl", value = it))
+        }
         if (inputData.variables.isNotEmpty()) {
           add(
             makeGroupParameter(
               name = "variables",
               parts =
-                inputData.variables.map { makeStringParameter(name = it.key, value = it.value) },
+                inputData.variables.map { (name, value) ->
+                  // Echoed in its own `value[x]`, as the API's example response does. A variable
+                  // declared with no `value[x]` echoes as a bare name.
+                  if (value == null) makeGroupParameter(name = name, parts = emptyList())
+                  else renameParameter(convertEvalResultToParameter(value), name)
+                },
             )
           )
         }

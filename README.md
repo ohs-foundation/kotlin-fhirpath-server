@@ -16,7 +16,7 @@ The server exposes three FHIRPath evaluation endpoints — one per FHIR version 
 
 |            Endpoint            | Method |                                 Description                                 |
 |--------------------------------|--------|-----------------------------------------------------------------------------|
-| `/`                            | GET    | API overview and endpoint listing                                           |
+| `/`                            | GET    | API overview, endpoint listing, and server version                          |
 | `/health`                      | GET    | Health check with current timestamp                                         |
 | `/kotlin-fhirpath-config.json` | GET    | [FHIRPath Lab custom engine configuration][custom-config] for local testing |
 | `/fhirpath-r4`                 | POST   | Evaluate a FHIRPath expression against an **R4** resource                   |
@@ -38,8 +38,26 @@ for the full parameter specification. Support status in this implementation:
 | `expression`        |     ✅     |
 | `resource`          |     ✅     |
 | `context`           |     ✅     |
-| `variables`         |     ✅     |
+| `variables`         |  partial  |
 | `terminologyserver` |     ❌     |
+
+- `resource` accepts the resource inline, or in a `json-value` extension. The server rejects the
+  `xml-value` form, because it reads JSON only.
+- `variables` accepts the FHIR primitive types that map onto a FHIRPath type, and `valueQuantity`.
+  It rejects the other types, such as `valueHumanName`, with a `400`. The error message names the
+  type it rejected. A variable with no `value[x]` binds to empty.
+- `variables` can repeat, and the server merges the parts of every occurrence. The other parameters
+  must not repeat. Two parts that bind the same variable name are rejected with a `400`.
+- The server accepts `terminologyserver`, echoes it back, and then ignores it. The engine has no
+  terminology functions yet.
+
+The server binds three standard variables for every evaluation:
+
+|    Variable     |                            Value                             |
+|-----------------|--------------------------------------------------------------|
+| `%resource`     | The resource from the `resource` parameter                   |
+| `%rootResource` | The same resource                                            |
+| `%context`      | Each item the `context` expression returned, or the resource |
 
 **Example request body:**
 
@@ -64,11 +82,71 @@ for the full parameter specification. Support status in this implementation:
 
 ### Response
 
-A successful evaluation returns HTTP `200` with a FHIR `Parameters` resource containing the results
-and debug trace information.
+A successful evaluation returns HTTP `200` with a FHIR `Parameters` resource. The response contains
+the evaluation results, the input parameters, and the output of any `trace()` calls. Each traced
+value carries a `resource-path` extension naming where in the test resource it came from.
 
-Validation errors return HTTP `400` with an `OperationOutcome`. Unexpected server errors return HTTP
-`500` with an `OperationOutcome`.
+The server does not produce the optional `parseDebugTree`, `parseDebug`, `expectedReturnType`, or
+`debug-trace` output. The engine exposes no AST or step trace yet, and the engine configuration
+declares `supportsAST: false`.
+
+A failure returns an `OperationOutcome`. The issue code identifies the cause:
+
+| Status |  Issue code  |                          Cause                          |
+|:------:|--------------|---------------------------------------------------------|
+| `400`  | `structure`  | The request body is not a JSON object                   |
+| `400`  | `required`   | A required parameter is absent                          |
+| `400`  | `invalid`    | A parameter holds a value the server cannot use         |
+| `400`  | `processing` | The FHIRPath expression failed to parse or to evaluate  |
+| `500`  | `exception`  | The server failed for a reason unrelated to the request |
+
+A fault in the submitted expression is a request error. It returns `400` and not `500`.
+
+## Versioning
+
+The build derives the server version from `git describe --tags --always --dirty` (see
+`build.gradle.kts`). The `/` endpoint reports this version. Every deployment therefore identifies
+the release or commit that produced it.
+
+The build removes the leading `v` from the tag name:
+
+|         Build point          |                   Reported version                    |
+|------------------------------|-------------------------------------------------------|
+| On the exact tag `v1.2.3`    | `1.2.3`                                               |
+| 4 commits after tag `v1.2.3` | `1.2.3-4-gabc1234` (commit count and abbreviated SHA) |
+| Before the first tag exists  | The abbreviated commit SHA                            |
+| With uncommitted changes     | The same value, plus the suffix `-dirty`              |
+| When git is unavailable      | `0.0.0-unknown`                                       |
+
+### Create a release
+
+To release a new version, tag the commit and push the tag:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+Every later build reads the new tag. You do not need to edit a version number anywhere in the
+project. You can also turn the tag into a GitHub Release, but the version does not depend on it.
+
+The Docker build is the exception. Its build context has no git history, so it cannot run
+`git describe` and reports `0.0.0-unknown` unless the caller passes the version in — see
+[Docker](#docker).
+
+### Engine version
+
+The `evaluator` output parameter reports the FHIRPath engine version, not the server version. This
+is the version of the `fhir-path` library that `gradle/libs.versions.toml` declares. The build
+writes it into the jar beside the server version:
+
+```
+Kotlin FHIRPath 1.0.0-beta05 (R4)
+```
+
+The FHIRPath Lab API requires this format: engine name, engine version, then FHIR version in
+brackets. The two versions move independently. A server release can keep the same engine, and an
+engine upgrade changes only this value.
 
 ## Deployment
 
@@ -110,15 +188,20 @@ A [Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml) are incl
 with Docker Compose:
 
 ```bash
+export VERSION="$(git describe --tags --always --dirty | sed 's/^v//')"
 docker compose up --build
 ```
 
 Or build and run the image directly:
 
 ```bash
-docker build -t fhirpath-server .
+docker build --build-arg VERSION="$(git describe --tags --always --dirty | sed 's/^v//')" \
+  -t fhirpath-server .
 docker run -p 8080:8080 fhirpath-server
 ```
+
+The `VERSION` argument is what the image reports at `/`. The build context carries no git history,
+so omitting it yields `0.0.0-unknown`.
 
 The Ktor Gradle plugin also provides Docker tasks as an alternative to the Dockerfile:
 

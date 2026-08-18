@@ -1,6 +1,10 @@
 services:
   fhirpath-server:
-    build: .
+    build:
+      context: .
+      args:
+        # export VERSION="$(git describe --tags --always --dirty | sed 's/^v//')" before building.
+        VERSION: "${VERSION:-}"
     ports:
       - "${PORT:-8080}:8080"
     environment:

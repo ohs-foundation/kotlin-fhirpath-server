@@ -55,6 +55,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Full history so `git describe` can find the release tag to stamp the image with.
+          fetch-depth: 0
 
       - name: Build Docker image
-        run: docker build -t kotlin-fhirpath-server:ci .
+        run: |
+          docker build \
+            --build-arg VERSION="$(git describe --tags --always --dirty | sed 's/^v//')" \
+            -t kotlin-fhirpath-server:ci .

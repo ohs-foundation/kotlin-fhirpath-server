@@ -29,6 +29,25 @@ import kotlinx.serialization.serializer
 
 class MissingRequiredFieldException(message: String) : SerializationException(message = message)
 
+/**
+ * Thrown when a request field is present but holds something the server cannot use — a
+ * `valueString` containing an object, a repeated `parameter` name, an unsupported variable
+ * `value[x]`.
+ *
+ * Distinct from [IllegalStateException] on purpose: `CancellationException` is an
+ * `IllegalStateException` on the JVM, so catching that would swallow cancellation.
+ */
+class InvalidFieldValueException(message: String) : SerializationException(message = message)
+
+/**
+ * Thrown when the submitted FHIRPath expression fails to parse or evaluate.
+ *
+ * A fault in the caller's expression, not in the server — reported as a 400 so the engine's message
+ * reaches the author of the expression rather than being labelled an internal error.
+ */
+class ExpressionEvaluationException(message: String, cause: Throwable? = null) :
+  Exception(message, cause)
+
 fun FhirPathTime.toLocalTime(): LocalTime =
   LocalTime(
     hour = this.hour,

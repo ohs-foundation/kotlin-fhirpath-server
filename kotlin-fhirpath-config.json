@@ -14,6 +14,20 @@
       "supportsXML": false
     },
 
+    "Kotlin FHIRPath R4B (Open Health Stack)": {
+      "name": "kotlin-fhirpath",
+      "legacyName": "Kotlin FHIRPath R4B (Open Health Stack)",
+      "fhirVersion": "R4B",
+      "appInsightsEngineName": "Kotlin",
+      "publisher": "Open Health Stack Foundation",
+      "configSetting": "kotlin_server_r4b",
+      "githubRepo": "https://github.com/ohs-foundation/kotlin-fhirpath",
+      "description": "A Kotlin implementation of FHIRPath for FHIR R4B by Open Health Stack.",
+      "external": true,
+      "supportsAST": false,
+      "supportsXML": false
+    },
+
     "Kotlin FHIRPath R5 (Open Health Stack)": {
       "name": "kotlin-fhirpath",
       "legacyName": "Kotlin FHIRPath R5 (Open Health Stack)",
@@ -29,7 +43,8 @@
       "earlyAdopter": true
     }
   },
-  "enabledEngines": ["fhirpath.js", "fhirpath.js (R5)", "Kotlin FHIRPath R4 (Open Health Stack)", "Kotlin FHIRPath R5 (Open Health Stack)"],
+  "enabledEngines": ["fhirpath.js", "fhirpath.js (R5)", "Kotlin FHIRPath R4 (Open Health Stack)", "Kotlin FHIRPath R4B (Open Health Stack)", "Kotlin FHIRPath R5 (Open Health Stack)"],
   "kotlin_server_r4": "http://localhost:8080/fhirpath-r4",
+  "kotlin_server_r4b": "http://localhost:8080/fhirpath-r4b",
   "kotlin_server_r5": "http://localhost:8080/fhirpath-r5"
 }
